@@ -44,23 +44,52 @@ const parseSummary = (file: TrxFile) => {
 const parseResults = (file: TrxFile) => {
   const results = file.TestRun?.Results?.[0]?.UnitTestResult ?? [];
 
-  return results.map(result => ({
-    executionId: String(result['$'].executionId),
-    testId: String(result['$'].testId),
-    testName: String(result['$'].testName),
-    testType: String(result['$'].testType),
-    testListId: String(result['$'].testListId),
-    computerName: String(result['$'].computerName),
-    duration: String(result['$'].duration),
-    startTime: new Date(result['$'].startTime),
-    endTime: new Date(result['$'].endTime),
-    outcome: String(result['$'].outcome) as TestOutcome,
-    output: String(result.Output?.[0]?.StdOut?.[0] ?? ''),
-    error: String(result.Output?.[0]?.ErrorInfo?.[0]?.Message?.[0] ?? ''),
-    trace: String(result.Output?.[0]?.ErrorInfo?.[0]?.StackTrace?.[0] ?? ''),
-    relativeResultsDirectory: String(result['$'].relativeResultsDirectory)
-  }));
+  const parseResult = (result: (typeof results)[number]): ReturnType<typeof mapResult>[] => {
+    const mappedResult = mapResult(result);
+    const innerResults = result.InnerResults?.[0]?.UnitTestResult ?? [];
+
+    return [mappedResult, ...innerResults.flatMap(parseResult)];
+  };
+
+  const mapResult = (result: (typeof results)[number]) => {
+    const attributes = result['$'];
+
+    return {
+      executionId: attributes.executionId ? String(attributes.executionId) : '',
+      testId: attributes.testId ? String(attributes.testId) : '',
+      testName: attributes.testName ? String(attributes.testName) : '',
+      testType: attributes.testType ? String(attributes.testType) : '',
+      testListId: attributes.testListId ? String(attributes.testListId) : '',
+      computerName: attributes.computerName ? String(attributes.computerName) : '',
+      duration: attributes.duration ? String(attributes.duration) : '',
+      startTime: new Date(attributes.startTime ?? ''),
+      endTime: new Date(attributes.endTime ?? ''),
+      outcome: String(attributes.outcome) as TestOutcome,
+      output: String(result.Output?.[0]?.StdOut?.[0] ?? ''),
+      error: String(result.Output?.[0]?.ErrorInfo?.[0]?.Message?.[0] ?? ''),
+      trace: String(result.Output?.[0]?.ErrorInfo?.[0]?.StackTrace?.[0] ?? ''),
+      relativeResultsDirectory: String(attributes.relativeResultsDirectory ?? '')
+    };
+  };
+
+  return results.flatMap(parseResult);
 };
+
+const doesResultMatchDefinition = (
+  result: ReturnType<typeof parseResults>[number],
+  definition: ReturnType<typeof parseDefinitions>[number]
+): boolean => {
+  if (result.testId === definition.id || result.executionId === definition.executionId) {
+    return true;
+  }
+
+  if (result.testName === definition.name) {
+    return true;
+  }
+
+  return result.testName.startsWith(`${definition.name}(`);
+};
+
 
 const parseDefinitions = (file: TrxFile) => {
   const definitions = file.TestRun?.TestDefinitions?.[0]?.UnitTest ?? [];
@@ -80,14 +109,22 @@ const parseDefinitions = (file: TrxFile) => {
   }));
 };
 
+const findAllResultsForDefinition = (
+  results: ReturnType<typeof parseResults>,
+  definition: ReturnType<typeof parseDefinitions>[number]
+) => {
+  return results.filter(result => doesResultMatchDefinition(result, definition));
+};
+
 const parseSuits = (file: TrxFile) => {
   const suits: ITestSuit[] = [];
   const results = parseResults(file);
   const definitions = parseDefinitions(file);
   const sortedDefinitions = definitions.sort((a, b) => a.name.localeCompare(b.name));
+  const processedResults = new Set<string>();
 
   for (const definition of sortedDefinitions) {
-    const result = results.find(r => r.testId === definition.id);
+    const matchingResults = findAllResultsForDefinition(results, definition);
     const existingSuit = suits.find(s => s.name === definition.testMethod.className);
     const suit = existingSuit || {
       name: definition.testMethod.className,
@@ -96,13 +133,21 @@ const parseSuits = (file: TrxFile) => {
       tests: []
     };
 
-    suit.tests.push({
-      name: definition.name.replace(`${definition.testMethod.className}.`, ''),
-      output: result?.output ?? '',
-      error: result?.error ?? '',
-      trace: result?.trace ?? '',
-      outcome: result?.outcome || 'NotExecuted'
-    });
+    for (const result of matchingResults) {
+      const resultKey = `${result.testId}-${result.executionId}`;
+
+      if (!processedResults.has(resultKey)) {
+        processedResults.add(resultKey);
+
+        suit.tests.push({
+          name: result.testName.replace(`${definition.testMethod.className}.`, ''),
+          output: result.output,
+          error: result.error,
+          trace: result.trace,
+          outcome: result.outcome
+        });
+      }
+    }
 
     if (!existingSuit) {
       suits.push(suit);
