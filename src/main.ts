@@ -1,6 +1,6 @@
 import { processTestResults } from './results';
 import { processTestCoverage } from './coverage';
-import { getInputs, publishComment, setFailed, setSummary, createTestStatusCheck } from './utils';
+import { getInputs, publishComment, setFailed, setSummary, createTestStatusCheck, log } from './utils';
 import {
   formatChangedFileCoverageMarkdown,
   formatCoverageMarkdown,
@@ -8,6 +8,8 @@ import {
 } from './formatting/markdown';
 import { formatCoverageHtml, formatResultHtml, formatTitleHtml } from './formatting/html';
 import { ICoverage } from './data';
+import { DefaultArtifactClient } from '@actions/artifact';
+import { writeFileSync } from 'fs';
 
 const publishChangedFileCoverage = async (
   coverage: ICoverage,
@@ -69,7 +71,21 @@ const run = async (): Promise<void> => {
       }
     }
 
-    await setSummary(summary);
+    // The GitHub step summary is capped at 1024 KB; a large test/coverage report
+    // exceeds it and fails the step. Past the cap, upload the summary as an
+    // artifact instead. Workaround from bibipkins/dotnet-test-reporter#53
+    // (still unmerged upstream) — the reason this fork exists.
+    const summaryKb = new Blob([summary]).size / 1024;
+
+    if (summaryKb > 1024) {
+      log('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.md artifact instead');
+      writeFileSync('testResults.md', summary);
+      const artifactClient = new DefaultArtifactClient();
+      await artifactClient.uploadArtifact('testResults', ['testResults.md'], '.', { retentionDays: 2 });
+    } else {
+      await setSummary(summary);
+    }
+
     await publishComment(token, serverUrl, title, comment, postNewComment);
 
     if (pullRequestCheck) {
