@@ -325,10 +325,10 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
         // (still unmerged upstream) — the reason this fork exists.
         const summaryKb = new Blob([summary]).size / 1024;
         if (summaryKb > 1024) {
-            (0, utils_1.log)('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.md artifact instead');
-            (0, fs_1.writeFileSync)('testResults.md', summary);
+            (0, utils_1.log)('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.html artifact instead');
+            (0, fs_1.writeFileSync)('testResults.html', summary);
             const artifactClient = new artifact_1.DefaultArtifactClient();
-            yield artifactClient.uploadArtifact('testResults', ['testResults.md'], '.', { retentionDays: 2 });
+            yield artifactClient.uploadArtifact('testResults', ['testResults.html'], '.', { retentionDays: 2 });
         }
         else {
             yield (0, utils_1.setSummary)(summary);
