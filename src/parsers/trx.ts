@@ -75,21 +75,6 @@ const parseResults = (file: TrxFile) => {
   return results.flatMap(parseResult);
 };
 
-const doesResultMatchDefinition = (
-  result: ReturnType<typeof parseResults>[number],
-  definition: ReturnType<typeof parseDefinitions>[number]
-): boolean => {
-  if (result.testId === definition.id || result.executionId === definition.executionId) {
-    return true;
-  }
-
-  if (result.testName === definition.name) {
-    return true;
-  }
-
-  return result.testName.startsWith(`${definition.name}(`);
-};
-
 const parseDefinitions = (file: TrxFile) => {
   const definitions = file.TestRun?.TestDefinitions?.[0]?.UnitTest ?? [];
 
@@ -108,23 +93,73 @@ const parseDefinitions = (file: TrxFile) => {
   }));
 };
 
+const indexResults = (results: ReturnType<typeof parseResults>) => {
+  const byTestId = new Map<string, number[]>();
+  const byExecutionId = new Map<string, number[]>();
+  const byTestName = new Map<string, number[]>();
+  const byParameterizedName = new Map<string, number[]>();
+
+  const add = (index: Map<string, number[]>, key: string, position: number) => {
+    const positions = index.get(key);
+
+    if (positions) {
+      positions.push(position);
+    } else {
+      index.set(key, [position]);
+    }
+  };
+
+  results.forEach((result, position) => {
+    add(byTestId, result.testId, position);
+    add(byExecutionId, result.executionId, position);
+    add(byTestName, result.testName, position);
+
+    // A parameterized result is named `<definition name>(<arguments>)`, and the arguments
+    // themselves can contain parentheses, so every prefix ending at a '(' is a definition
+    // name this result could belong to.
+    for (let i = result.testName.indexOf('('); i !== -1; i = result.testName.indexOf('(', i + 1)) {
+      add(byParameterizedName, result.testName.slice(0, i), position);
+    }
+  });
+
+  return { byTestId, byExecutionId, byTestName, byParameterizedName };
+};
+
 const findAllResultsForDefinition = (
   results: ReturnType<typeof parseResults>,
+  index: ReturnType<typeof indexResults>,
   definition: ReturnType<typeof parseDefinitions>[number]
 ) => {
-  return results.filter(result => doesResultMatchDefinition(result, definition));
+  const positions = new Set<number>();
+
+  const candidates = [
+    index.byTestId.get(definition.id),
+    index.byExecutionId.get(definition.executionId),
+    index.byTestName.get(definition.name),
+    index.byParameterizedName.get(definition.name)
+  ];
+
+  for (const candidate of candidates) {
+    candidate?.forEach(position => positions.add(position));
+  }
+
+  // Restore the original document order a linear scan would have produced, so which
+  // definition claims a shared result stays deterministic.
+  return [...positions].sort((a, b) => a - b).map(position => results[position]);
 };
 
 const parseSuits = (file: TrxFile) => {
   const suits: ITestSuit[] = [];
+  const suitsByName = new Map<string, ITestSuit>();
   const results = parseResults(file);
+  const index = indexResults(results);
   const definitions = parseDefinitions(file);
   const sortedDefinitions = definitions.sort((a, b) => a.name.localeCompare(b.name));
   const processedResults = new Set<string>();
 
   for (const definition of sortedDefinitions) {
-    const matchingResults = findAllResultsForDefinition(results, definition);
-    const existingSuit = suits.find(s => s.name === definition.testMethod.className);
+    const matchingResults = findAllResultsForDefinition(results, index, definition);
+    const existingSuit = suitsByName.get(definition.testMethod.className);
     const suit = existingSuit || {
       name: definition.testMethod.className,
       success: false,
@@ -149,6 +184,7 @@ const parseSuits = (file: TrxFile) => {
     }
 
     if (!existingSuit) {
+      suitsByName.set(suit.name, suit);
       suits.push(suit);
     }
   }

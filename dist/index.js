@@ -325,10 +325,10 @@ const run = () => __awaiter(void 0, void 0, void 0, function* () {
         // (still unmerged upstream) — the reason this fork exists.
         const summaryKb = new Blob([summary]).size / 1024;
         if (summaryKb > 1024) {
-            (0, utils_1.log)('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.md artifact instead');
-            (0, fs_1.writeFileSync)('testResults.md', summary);
+            (0, utils_1.log)('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.html artifact instead');
+            (0, fs_1.writeFileSync)('testResults.html', summary);
             const artifactClient = new artifact_1.DefaultArtifactClient();
-            yield artifactClient.uploadArtifact('testResults', ['testResults.md'], '.', { retentionDays: 2 });
+            yield artifactClient.uploadArtifact('testResults', ['testResults.html'], '.', { retentionDays: 2 });
         }
         else {
             yield (0, utils_1.setSummary)(summary);
@@ -686,15 +686,6 @@ const parseResults = (file) => {
     };
     return results.flatMap(parseResult);
 };
-const doesResultMatchDefinition = (result, definition) => {
-    if (result.testId === definition.id || result.executionId === definition.executionId) {
-        return true;
-    }
-    if (result.testName === definition.name) {
-        return true;
-    }
-    return result.testName.startsWith(`${definition.name}(`);
-};
 const parseDefinitions = (file) => {
     var _a, _b, _c, _d;
     const definitions = (_d = (_c = (_b = (_a = file.TestRun) === null || _a === void 0 ? void 0 : _a.TestDefinitions) === null || _b === void 0 ? void 0 : _b[0]) === null || _c === void 0 ? void 0 : _c.UnitTest) !== null && _d !== void 0 ? _d : [];
@@ -715,18 +706,59 @@ const parseDefinitions = (file) => {
         });
     });
 };
-const findAllResultsForDefinition = (results, definition) => {
-    return results.filter(result => doesResultMatchDefinition(result, definition));
+const indexResults = (results) => {
+    const byTestId = new Map();
+    const byExecutionId = new Map();
+    const byTestName = new Map();
+    const byParameterizedName = new Map();
+    const add = (index, key, position) => {
+        const positions = index.get(key);
+        if (positions) {
+            positions.push(position);
+        }
+        else {
+            index.set(key, [position]);
+        }
+    };
+    results.forEach((result, position) => {
+        add(byTestId, result.testId, position);
+        add(byExecutionId, result.executionId, position);
+        add(byTestName, result.testName, position);
+        // A parameterized result is named `<definition name>(<arguments>)`, and the arguments
+        // themselves can contain parentheses, so every prefix ending at a '(' is a definition
+        // name this result could belong to.
+        for (let i = result.testName.indexOf('('); i !== -1; i = result.testName.indexOf('(', i + 1)) {
+            add(byParameterizedName, result.testName.slice(0, i), position);
+        }
+    });
+    return { byTestId, byExecutionId, byTestName, byParameterizedName };
+};
+const findAllResultsForDefinition = (results, index, definition) => {
+    const positions = new Set();
+    const candidates = [
+        index.byTestId.get(definition.id),
+        index.byExecutionId.get(definition.executionId),
+        index.byTestName.get(definition.name),
+        index.byParameterizedName.get(definition.name)
+    ];
+    for (const candidate of candidates) {
+        candidate === null || candidate === void 0 ? void 0 : candidate.forEach(position => positions.add(position));
+    }
+    // Restore the original document order a linear scan would have produced, so which
+    // definition claims a shared result stays deterministic.
+    return [...positions].sort((a, b) => a - b).map(position => results[position]);
 };
 const parseSuits = (file) => {
     const suits = [];
+    const suitsByName = new Map();
     const results = parseResults(file);
+    const index = indexResults(results);
     const definitions = parseDefinitions(file);
     const sortedDefinitions = definitions.sort((a, b) => a.name.localeCompare(b.name));
     const processedResults = new Set();
     for (const definition of sortedDefinitions) {
-        const matchingResults = findAllResultsForDefinition(results, definition);
-        const existingSuit = suits.find(s => s.name === definition.testMethod.className);
+        const matchingResults = findAllResultsForDefinition(results, index, definition);
+        const existingSuit = suitsByName.get(definition.testMethod.className);
         const suit = existingSuit || {
             name: definition.testMethod.className,
             success: false,
@@ -747,6 +779,7 @@ const parseSuits = (file) => {
             }
         }
         if (!existingSuit) {
+            suitsByName.set(suit.name, suit);
             suits.push(suit);
         }
     }

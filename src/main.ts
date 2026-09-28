@@ -78,10 +78,10 @@ const run = async (): Promise<void> => {
     const summaryKb = new Blob([summary]).size / 1024;
 
     if (summaryKb > 1024) {
-      log('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.md artifact instead');
-      writeFileSync('testResults.md', summary);
+      log('Summary exceeds the 1024 KB step-summary limit; uploading as testResults.html artifact instead');
+      writeFileSync('testResults.html', summary);
       const artifactClient = new DefaultArtifactClient();
-      await artifactClient.uploadArtifact('testResults', ['testResults.md'], '.', { retentionDays: 2 });
+      await artifactClient.uploadArtifact('testResults', ['testResults.html'], '.', { retentionDays: 2 });
     } else {
       await setSummary(summary);
     }
